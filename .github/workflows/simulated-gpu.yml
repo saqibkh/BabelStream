@@ -1,0 +1,36 @@
+name: Simulated GPU
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: ${{ matrix.variant }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {variant: "cuda", model: "cuda", gpu: "nvidia/a100", cmake_args: "-DCMAKE_CUDA_COMPILER=nvcc -DCUDA_ARCH=sm_80 -DCMAKE_CUDA_RUNTIME_LIBRARY=Shared"}
+          - {variant: "rocm-hip", model: "hip", gpu: "amd/mi300x", rocm: "7.2", cmake_args: "-DCMAKE_CXX_COMPILER=/opt/rocm/bin/hipcc -DCXX_EXTRA_FLAGS=--offload-arch=gfx942"}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Runs the kernels on a simulated GPU on the runner's CPU, so BabelStream's own result check
+      # runs. Functional only, timings and bandwidth are meaningless.
+      - uses: pantheongpu/setup-pantheonsim@23932d9b811269d55c8d65687332fefc65daeb2c # v0.1.3
+        with:
+          gpu: ${{ matrix.gpu }}
+          rocm: ${{ matrix.rocm }}
+      - name: Build
+        run: |
+          read -r -a model_flags <<< "${{ matrix.cmake_args }}"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DUSAGE=OFF -DMODEL=${{ matrix.model }} "${model_flags[@]}"
+          cmake --build build
+      - name: Run
+        run: vgpu run ./build/${{ matrix.model }}-stream --arraysize 4096 --numtimes 4
+      - name: Run (float)
+        run: vgpu run ./build/${{ matrix.model }}-stream --arraysize 4096 --numtimes 4 --float
